@@ -8,6 +8,8 @@ import (
 	"net/rpc"
 	"os"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Map functions return a slice of KeyValue.
@@ -28,16 +30,14 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// Your worker implementation here.
+	workerID := uuid.NewString()
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-	args := TaskRequest{}
+	// Request a Task, refactor later into a method
+	args := TaskRequest{WorkerID: workerID}
 	reply := TaskReply{}
 
 	ok := call("Coordinator.RequestTask", &args, &reply)
 	if ok {
-		// reply.Y should be 100.
 		fmt.Printf("reply %v\n", reply.Filename)
 	} else {
 		fmt.Printf("call failed!\n")
@@ -48,20 +48,33 @@ func Worker(mapf func(string, string) []KeyValue,
 		fmt.Println(err)
 	}
 
-	wordsMap := make(map[string]int)
+	// wordsMap := make(map[string]int)
 	scanner := bufio.NewScanner(openedFile)
-	for i := 0; i < 10 && scanner.Scan(); i++ {
-		splitLine := strings.Split(scanner.Text(), " ")
-		for _, word := range splitLine {
-			if len(word) == 0 {
-				break
-			}
-			wordsMap[word]++
-		}
-
-		fmt.Println(splitLine)
-		fmt.Println(wordsMap)
+	var fulltext []string
+	for scanner.Scan() {
+		fulltext = append(fulltext, scanner.Text())
 	}
+	// for i := 0; scanner.Scan(); i++ {
+	// 	splitLine := strings.Split(scanner.Text(), " ")
+	// 	for _, word := range splitLine {
+	// 		if len(word) == 0 {
+	// 			break
+	// 		}
+	// 		wordsMap[word]++
+	// 	}
+	// }
+	// fmt.Println(wordsMap)
+	result := mapf(reply.Filename, strings.Join(fulltext, " "))
+
+	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
+	argsComplete := CompleteRequest{Result: result, WorkerID: workerID}
+	replyComplete := CompleteReply{}
+	ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
+
+	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
+	argsComplete := ReduceRequest{Result: result, WorkerID: workerID}
+	replyComplete := ReduceReply{}
+	ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
 }
 
 // example function to show how to make an RPC call to the coordinator.

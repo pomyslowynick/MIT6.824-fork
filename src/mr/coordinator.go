@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"time"
 )
 
 type Coordinator struct {
@@ -14,15 +15,37 @@ type Coordinator struct {
 	FileList    []string
 	UnusedFiles []string
 	UsedFiles   []string
+	Workers     []WorkerEntry
+	NReduce     int
 }
 
-// Your code here -- RPC handlers for the worker to call.
+type WorkerEntry struct {
+	WorkerID     string
+	AssignedFile string
+	TimeStarted  time.Time
+}
+
+func (c *Coordinator) RequestComplete(args *CompleteRequest, reply *CompleteReply) error {
+	fmt.Println(args.Result)
+
+	return nil
+}
+
 func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 	reply.Filename = c.UnusedFiles[0]
 	c.UnusedFiles = c.UnusedFiles[1:]
 	c.UsedFiles = append(c.UsedFiles, c.UnusedFiles[0])
-	return nil
+	w := WorkerEntry{WorkerID: args.WorkerID, AssignedFile: reply.Filename, TimeStarted: time.Now()}
 
+	// Not sure if we need to keep those in a global state var
+	// Could instead fire off a goroutine per worker to check back?
+	// How do we then know when it's request came back?
+	c.Workers = append(c.Workers, w)
+	fmt.Println(c.UsedFiles)
+
+	// TODO: Run async task to check on result after 60 seconds
+
+	return nil
 }
 
 // an example RPC handler.
@@ -64,6 +87,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	c.FileList = files
 	c.UnusedFiles = files
+	c.NReduce = nReduce
 	fmt.Println(files)
 	// Your code here.
 

@@ -16,7 +16,25 @@ import (
 // and reply for an RPC.
 //
 
+type ReduceRequest struct {
+	WorkerID string
+}
+
+type ReduceReply struct {
+	Result []KeyValue
+}
+
+type CompleteRequest struct {
+	WorkerID string
+	Result   []KeyValue
+}
+
+type CompleteReply struct {
+	Filename string
+}
+
 type TaskRequest struct {
+	WorkerID string
 }
 
 type TaskReply struct {
