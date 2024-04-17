@@ -17,16 +17,18 @@ import (
 //
 
 type ReduceRequest struct {
-	WorkerID string
+	ReducerID string
 }
 
 type ReduceReply struct {
-	Result []KeyValue
+	Finished  bool
+	Filename  string
+	ReducerID int
 }
 
 type CompleteRequest struct {
-	WorkerID string
-	Result   []KeyValue
+	WorkerID          string
+	MapperOutputFiles []string
 }
 
 type CompleteReply struct {
@@ -38,7 +40,9 @@ type TaskRequest struct {
 }
 
 type TaskReply struct {
+	Finished bool
 	Filename string
+	NReduce  int
 }
 
 type ExampleArgs struct {

@@ -2,12 +2,14 @@ package mr
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"log"
 	"net/rpc"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -36,16 +38,97 @@ func Worker(mapf func(string, string) []KeyValue,
 	args := TaskRequest{WorkerID: workerID}
 	reply := TaskReply{}
 
-	ok := call("Coordinator.RequestTask", &args, &reply)
-	if ok {
-		fmt.Printf("reply %v\n", reply.Filename)
-	} else {
-		fmt.Printf("call failed!\n")
+	for {
+		ok := call("Coordinator.RequestTask", &args, &reply)
+		if ok {
+			if reply.Finished {
+				break
+			}
+			if mappedFiles, err := ProcessTask(reply.Filename, mapf, reply.NReduce, workerID); err == nil {
+				// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
+				argsComplete := CompleteRequest{WorkerID: workerID, MapperOutputFiles: mappedFiles}
+				replyComplete := CompleteReply{}
+				time.Sleep(100 * time.Millisecond)
+				ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
+			}
+		} else {
+			fmt.Printf("call failed! Retrying: \n")
+		}
 	}
 
-	openedFile, err := os.Open(reply.Filename)
+	reducerID := uuid.NewString()
+	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
+	argsReduce := ReduceRequest{ReducerID: reducerID}
+	replyReduce := ReduceReply{}
+	ok := call("Coordinator.RequestReduce", &argsReduce, &replyReduce)
+	// reducerID := reply.ReducerID
+	for {
+		if ok {
+			if replyReduce.Finished {
+				break
+			}
+			// ProcessTask(reply.Filename, mapf)
+			// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
+			if err := ProcessReduceTask(replyReduce.Filename, reducef); err == nil {
+				argsComplete := CompleteRequest{WorkerID: workerID}
+				replyComplete := CompleteReply{}
+				time.Sleep(500 * time.Millisecond)
+				ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
+			}
+		} else {
+			fmt.Printf("call failed! Retrying: \n")
+		}
+	}
+}
+
+func ProcessReduceTask(filename string, reducef func(string, []string) string) error {
+	openedFile, err := os.Open(filename)
 	if err != nil {
 		fmt.Println(err)
+		return err
+	}
+
+	enc := json.NewDecoder(openedFile)
+
+	var decodedKeys []KeyValue
+	err = enc.Decode(decodedKeys)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	fmt.Println(decodedKeys)
+	// result := reducef(filename, strings.Join(fulltext, " "))
+	// intermediate := make(map[int][]KeyValue)
+
+	// for _, kv := range result {
+	// 	intermediate[ihash(kv.Key)%NReduce] = append(intermediate[ihash(kv.Key)%NReduce], kv)
+	// }
+
+	// fmt.Println(intermediate)
+
+	// var mappedFiles []string
+
+	// for key, _ := range intermediate {
+	// 	mappedFilename := fmt.Sprintf("%v-%v-%v", workerID, filename, key)
+	// 	file, err := os.Create(mappedFilename)
+	// 	if err != nil {
+	// 		fmt.Println(err)
+	// 		return err
+	// 	}
+	// 	mappedFiles = append(mappedFiles, mappedFilename)
+
+	// 	enc.Encode(intermediate[key])
+	// }
+
+	return nil
+}
+
+func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce int, workerID string) ([]string, error) {
+	openedFile, err := os.Open(filename)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
 	}
 
 	// wordsMap := make(map[string]int)
@@ -54,54 +137,31 @@ func Worker(mapf func(string, string) []KeyValue,
 	for scanner.Scan() {
 		fulltext = append(fulltext, scanner.Text())
 	}
-	// for i := 0; scanner.Scan(); i++ {
-	// 	splitLine := strings.Split(scanner.Text(), " ")
-	// 	for _, word := range splitLine {
-	// 		if len(word) == 0 {
-	// 			break
-	// 		}
-	// 		wordsMap[word]++
-	// 	}
-	// }
-	// fmt.Println(wordsMap)
-	result := mapf(reply.Filename, strings.Join(fulltext, " "))
+	result := mapf(filename, strings.Join(fulltext, " "))
+	intermediate := make(map[int][]KeyValue)
 
-	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
-	argsComplete := CompleteRequest{Result: result, WorkerID: workerID}
-	replyComplete := CompleteReply{}
-	ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
-
-	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
-	argsComplete := ReduceRequest{Result: result, WorkerID: workerID}
-	replyComplete := ReduceReply{}
-	ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
-}
-
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
+	for _, kv := range result {
+		intermediate[ihash(kv.Key)%NReduce] = append(intermediate[ihash(kv.Key)%NReduce], kv)
 	}
+
+	fmt.Println(intermediate)
+
+	var mappedFiles []string
+
+	for key, _ := range intermediate {
+		mappedFilename := fmt.Sprintf("%v-%v-%v", workerID, filename, key)
+		file, err := os.Create(mappedFilename)
+		if err != nil {
+			fmt.Println(err)
+			return nil, err
+		}
+		mappedFiles = append(mappedFiles, mappedFilename)
+
+		enc := json.NewEncoder(file)
+		enc.Encode(intermediate[key])
+	}
+
+	return mappedFiles, nil
 }
 
 // send an RPC request to the coordinator, wait for the response.
