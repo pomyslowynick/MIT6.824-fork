@@ -10,7 +10,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -57,7 +56,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 				argsComplete := CompleteRequest{WorkerID: workerID, MapperOutputFiles: mappedFiles}
 				replyComplete := CompleteReply{}
-				time.Sleep(10 * time.Millisecond)
+				// time.Sleep(10 * time.Millisecond)
 				ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
 			}
 		} else {
@@ -66,6 +65,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 
 	reducerID := uuid.NewString()
+	fmt.Println("Finished mapping, proceeding to reducing")
 	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 	// reducerID := reply.ReducerID
 	for {
@@ -78,7 +78,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 		if ok {
 			for {
-				fmt.Println(replyReduceID.NReduceID)
+				// fmt.Println(replyReduceID.NReduceID)
 				argsReduce := ReduceRequest{ReducerID: reducerID, NReduceID: replyReduceID.NReduceID}
 				replyReduce := ReduceReply{}
 				ok := call("Coordinator.RequestReduce", &argsReduce, &replyReduce)
@@ -91,7 +91,7 @@ func Worker(mapf func(string, string) []KeyValue,
 					if err := ProcessReduceTask(replyReduce.Files, reducef, replyReduceID.NReduceID); err == nil {
 						argsComplete := ReduceCompleteRequest{ReducerID: reducerID}
 						replyComplete := ReduceCompleteReply{}
-						time.Sleep(20 * time.Millisecond)
+						// time.Sleep(20 * time.Millisecond)
 						// fmt.Println("Calling reduce complete")
 						ok = call("Coordinator.RequestReduceComplete", &argsComplete, &replyComplete)
 					} else {
@@ -111,11 +111,11 @@ func Worker(mapf func(string, string) []KeyValue,
 func ProcessReduceTask(files []string, reducef func(string, []string) string, nReduceID int) error {
 	var totalKeys []KeyValue
 
-	fmt.Println(files)
+	// fmt.Println(files)
 	for _, filename := range files {
 		openedFile, err := os.Open(filename)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("failed in ProcessReduceTask reading file:", err)
 			return err
 		}
 
@@ -137,11 +137,11 @@ func ProcessReduceTask(files []string, reducef func(string, []string) string, nR
 
 	sort.Sort(ByKey(totalKeys))
 
-	fmt.Println(totalKeys)
-	outputFile, err := os.Open(fmt.Sprintf("mr-out-test-%v", nReduceID))
+	// fmt.Println(totalKeys)
+	outputFile, err := os.Open(fmt.Sprintf("mr-out-%v", nReduceID))
 	if err != nil {
-		fmt.Println("Creating output file: ", err)
-		outputFile, err = os.Create(fmt.Sprintf("mr-out-test-%v", nReduceID))
+		// fmt.Println("Creating output file: ", err)
+		outputFile, err = os.Create(fmt.Sprintf("mr-out-%v", nReduceID))
 		if err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func ProcessReduceTask(files []string, reducef func(string, []string) string, nR
 func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce int, workerID string) (map[int]string, error) {
 	openedFile, err := os.Open(filename)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("failed in ProcessTask reading file:", err)
 		return nil, err
 	}
 
@@ -201,7 +201,7 @@ func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce 
 	mappedFiles := make(map[int]string)
 
 	for key, _ := range intermediate {
-		mappedFilename := fmt.Sprintf("%v-%v-%v", workerID, filename, key)
+		mappedFilename := fmt.Sprintf("%v-%v", filename, key)
 		file, err := os.Create(mappedFilename)
 		if err != nil {
 			fmt.Println(err)

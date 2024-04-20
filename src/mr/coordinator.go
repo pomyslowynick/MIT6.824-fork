@@ -40,6 +40,7 @@ func (c *Coordinator) RequestReduceComplete(args *ReduceCompleteRequest, reply *
 	// c.UsedReduceFiles = append(c.UsedReduceFiles, args.Filename)
 	return nil
 }
+
 func (c *Coordinator) RequestComplete(args *CompleteRequest, reply *CompleteReply) error {
 	if entry, ok := c.Workers[args.WorkerID]; ok {
 		entry.State = "completed"
