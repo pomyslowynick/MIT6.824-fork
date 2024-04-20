@@ -16,23 +16,40 @@ import (
 // and reply for an RPC.
 //
 
+type ReduceNReduceIDRequest struct {
+	ReducerID string
+}
+
+type ReduceNReduceIDReply struct {
+	NReduceID int
+	Finished  bool
+}
+
 type ReduceRequest struct {
+	NReduceID int
 	ReducerID string
 }
 
 type ReduceReply struct {
 	Finished  bool
-	Filename  string
+	Files     []string
 	ReducerID int
+}
+
+type ReduceCompleteRequest struct {
+	ReducerID string
+}
+
+type ReduceCompleteReply struct {
+	Filename string
 }
 
 type CompleteRequest struct {
 	WorkerID          string
-	MapperOutputFiles []string
+	MapperOutputFiles map[int]string
 }
 
 type CompleteReply struct {
-	Filename string
 }
 
 type TaskRequest struct {

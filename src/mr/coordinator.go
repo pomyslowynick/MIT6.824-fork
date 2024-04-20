@@ -17,24 +17,37 @@ type Coordinator struct {
 	UsedFiles         []string
 	Workers           map[string]WorkerEntry
 	NReduce           int
-	UnusedReduceFiles []string
-	UsedReduceFiles   []string
+	UnusedReduceFiles map[int][]string
+	UsedReduceFiles   map[int][]string
+	Reducers          map[string]WorkerEntry
+	JobComplete       bool
 }
 
 type WorkerEntry struct {
-	WorkerID     string
+	WorkerID string
+	// TODO: Change to files
 	AssignedFile string
+	ReduceFiles  []string
 	TimeStarted  time.Time
 	State        string
+	NReduce      int
 }
 
+func (c *Coordinator) RequestReduceComplete(args *ReduceCompleteRequest, reply *ReduceCompleteReply) error {
+	if entry, ok := c.Reducers[args.ReducerID]; ok {
+		entry.State = "completed"
+	}
+	// c.UsedReduceFiles = append(c.UsedReduceFiles, args.Filename)
+	return nil
+}
 func (c *Coordinator) RequestComplete(args *CompleteRequest, reply *CompleteReply) error {
-	// fmt.Println(args.Result)
 	if entry, ok := c.Workers[args.WorkerID]; ok {
 		entry.State = "completed"
 	}
-	c.UnusedReduceFiles = append(c.UnusedReduceFiles, args.MapperOutputFiles...)
-	// fmt.Println(c.UnusedReduceFiles)
+
+	for key, file := range args.MapperOutputFiles {
+		c.UnusedReduceFiles[key] = append(c.UnusedReduceFiles[key], file)
+	}
 	return nil
 }
 
@@ -51,13 +64,13 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 		}
 
 		reply.NReduce = c.NReduce
+		// TODO: Chck that we are not adding redundant entries to Workers
 		w := WorkerEntry{WorkerID: args.WorkerID, AssignedFile: assignedFile, TimeStarted: time.Now(), State: "working"}
 
 		// Not sure if we need to keep those in a global state var
 		// Could instead fire off a goroutine per worker to check back?
 		// How do we then know when it's request came back?
 		c.Workers[args.WorkerID] = w
-		// fmt.Println(c.UsedFiles)
 
 	} else {
 		reply.Finished = true
@@ -67,22 +80,37 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 	return nil
 }
 
+func (c *Coordinator) RequestNReduceID(args *ReduceNReduceIDRequest, reply *ReduceNReduceIDReply) error {
+	if c.NReduce < 0 {
+		reply.Finished = true
+		c.JobComplete = true
+		return nil
+	}
+	reply.NReduceID = c.NReduce
+	retrievedReducer := c.Reducers[args.ReducerID]
+	retrievedReducer.NReduce = c.NReduce
+	c.NReduce--
+	return nil
+}
+
 func (c *Coordinator) RequestReduce(args *ReduceRequest, reply *ReduceReply) error {
-	if len(c.UnusedReduceFiles) > 0 {
-		reply.Filename = c.UnusedReduceFiles[0]
-		c.UsedReduceFiles = append(c.UsedReduceFiles, c.UnusedReduceFiles[0])
+	// How to create a sticky ID for reducers where they process single file number, all of one from 0-9
+	NReduceID := args.NReduceID
+	if len(c.UnusedReduceFiles[NReduceID]) > 0 {
+		reply.Files = c.UnusedReduceFiles[NReduceID]
+		c.UsedReduceFiles[NReduceID] = append(c.UsedReduceFiles[NReduceID], c.UnusedReduceFiles[NReduceID]...)
+		c.UnusedReduceFiles[NReduceID] = nil
 
-		if len(c.UnusedReduceFiles) != 1 {
-			c.UnusedReduceFiles = c.UnusedReduceFiles[1:]
-		}
+		// if len(c.UnusedReduceFiles) != 1 {
+		// 	c.UnusedReduceFiles[NReduceID] = c.UnusedReduceFiles[NReduceID][1:]
+		// }
 
-		w := WorkerEntry{WorkerID: args.ReducerID, AssignedFile: reply.Filename, TimeStarted: time.Now()}
+		w := WorkerEntry{WorkerID: args.ReducerID, ReduceFiles: reply.Files, TimeStarted: time.Now()}
 
 		// Not sure if we need to keep those in a global state var
 		// Could instead fire off a goroutine per worker to check back?
 		// How do we then know when it's request came back?
-		c.Workers[args.ReducerID] = w
-		// fmt.Println(c.UsedFiles)
+		c.Reducers[args.ReducerID] = w
 		fmt.Println("Requesting reduce")
 
 	} else {
@@ -119,7 +147,9 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	ret := false
 
-	// Your code here.
+	if c.JobComplete {
+		ret = true
+	}
 
 	return ret
 }
@@ -133,6 +163,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.UnusedFiles = files
 	c.NReduce = nReduce
 	c.Workers = make(map[string]WorkerEntry)
+	c.Reducers = make(map[string]WorkerEntry)
+	c.UnusedReduceFiles = make(map[int][]string)
+	c.UsedReduceFiles = make(map[int][]string)
 	// Your code here.
 
 	c.server()

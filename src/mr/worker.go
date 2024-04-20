@@ -8,11 +8,20 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -48,7 +57,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 				argsComplete := CompleteRequest{WorkerID: workerID, MapperOutputFiles: mappedFiles}
 				replyComplete := CompleteReply{}
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
 				ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
 			}
 		} else {
@@ -58,73 +67,118 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	reducerID := uuid.NewString()
 	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
-	argsReduce := ReduceRequest{ReducerID: reducerID}
-	replyReduce := ReduceReply{}
-	ok := call("Coordinator.RequestReduce", &argsReduce, &replyReduce)
 	// reducerID := reply.ReducerID
 	for {
+		argsReduceID := ReduceNReduceIDRequest{ReducerID: reducerID}
+		replyReduceID := ReduceNReduceIDReply{}
+		ok := call("Coordinator.RequestNReduceID", &argsReduceID, &replyReduceID)
+		if replyReduceID.Finished {
+			break
+		}
+
 		if ok {
-			if replyReduce.Finished {
-				break
-			}
-			// ProcessTask(reply.Filename, mapf)
-			// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
-			if err := ProcessReduceTask(replyReduce.Filename, reducef); err == nil {
-				argsComplete := CompleteRequest{WorkerID: workerID}
-				replyComplete := CompleteReply{}
-				time.Sleep(500 * time.Millisecond)
-				ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
+			for {
+				fmt.Println(replyReduceID.NReduceID)
+				argsReduce := ReduceRequest{ReducerID: reducerID, NReduceID: replyReduceID.NReduceID}
+				replyReduce := ReduceReply{}
+				ok := call("Coordinator.RequestReduce", &argsReduce, &replyReduce)
+				if ok {
+					if replyReduce.Finished {
+						break
+					}
+					// ProcessTask(reply.Filename, mapf)
+					// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
+					if err := ProcessReduceTask(replyReduce.Files, reducef, replyReduceID.NReduceID); err == nil {
+						argsComplete := ReduceCompleteRequest{ReducerID: reducerID}
+						replyComplete := ReduceCompleteReply{}
+						time.Sleep(20 * time.Millisecond)
+						// fmt.Println("Calling reduce complete")
+						ok = call("Coordinator.RequestReduceComplete", &argsComplete, &replyComplete)
+					} else {
+						panic("failed to run reduce on file: ")
+
+					}
+				} else {
+					fmt.Printf("call failed! Retrying: \n")
+				}
 			}
 		} else {
-			fmt.Printf("call failed! Retrying: \n")
+			fmt.Printf("couldn't obtain reduceID: \n")
 		}
 	}
 }
 
-func ProcessReduceTask(filename string, reducef func(string, []string) string) error {
-	openedFile, err := os.Open(filename)
-	if err != nil {
-		fmt.Println(err)
-		return err
+func ProcessReduceTask(files []string, reducef func(string, []string) string, nReduceID int) error {
+	var totalKeys []KeyValue
+
+	fmt.Println(files)
+	for _, filename := range files {
+		openedFile, err := os.Open(filename)
+		if err != nil {
+			fmt.Println(err)
+			return err
+		}
+
+		var decodedKeys []KeyValue
+		enc := json.NewDecoder(openedFile)
+
+		err = enc.Decode(&decodedKeys)
+		if err != nil {
+			fmt.Println("error decoding file: ", err)
+			return err
+		}
+
+		totalKeys = append(totalKeys, decodedKeys...)
+
+		// fmt.Println(totalKeys)
+		// fmt.Println(filename)
+		// time.Sleep(100 * time.Second)
 	}
 
-	enc := json.NewDecoder(openedFile)
+	sort.Sort(ByKey(totalKeys))
 
-	var decodedKeys []KeyValue
-	err = enc.Decode(decodedKeys)
+	fmt.Println(totalKeys)
+	outputFile, err := os.Open(fmt.Sprintf("mr-out-test-%v", nReduceID))
 	if err != nil {
-		fmt.Println(err)
-		return err
+		fmt.Println("Creating output file: ", err)
+		outputFile, err = os.Create(fmt.Sprintf("mr-out-test-%v", nReduceID))
+		if err != nil {
+			return err
+		}
 	}
 
-	fmt.Println(decodedKeys)
-	// result := reducef(filename, strings.Join(fulltext, " "))
-	// intermediate := make(map[int][]KeyValue)
+	for i := 0; i < len(totalKeys); {
+		j := i + 1
 
-	// for _, kv := range result {
-	// 	intermediate[ihash(kv.Key)%NReduce] = append(intermediate[ihash(kv.Key)%NReduce], kv)
-	// }
+		for j < len(totalKeys) && totalKeys[i].Key == totalKeys[j].Key {
+			j++
+		}
 
-	// fmt.Println(intermediate)
+		values := []string{}
 
-	// var mappedFiles []string
+		for k := i; k < j; k++ {
+			values = append(values, totalKeys[k].Value)
+		}
+		// for _, val := range totalKeys[i:j] {
+		// 	values = append(values, val.Value)
+		// }
 
-	// for key, _ := range intermediate {
-	// 	mappedFilename := fmt.Sprintf("%v-%v-%v", workerID, filename, key)
-	// 	file, err := os.Create(mappedFilename)
-	// 	if err != nil {
-	// 		fmt.Println(err)
-	// 		return err
-	// 	}
-	// 	mappedFiles = append(mappedFiles, mappedFilename)
+		// fmt.Println("values are: ", values)
+		result := reducef(totalKeys[i].Key, values)
+		// fmt.Println("result is: ", result)
+		// fmt.Println("key is: ", totalKeys[i].Key)
+		// time.Sleep(500 * time.Millisecond)
 
-	// 	enc.Encode(intermediate[key])
-	// }
-
+		outputFile.WriteString(fmt.Sprintf("%v %v\n", totalKeys[i].Key, result))
+		i = j
+	}
+	// time.Sleep(100 * time.Second)
+	// time.Sleep(100 * time.Second)
 	return nil
+
 }
 
-func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce int, workerID string) ([]string, error) {
+func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce int, workerID string) (map[int]string, error) {
 	openedFile, err := os.Open(filename)
 	if err != nil {
 		fmt.Println(err)
@@ -144,9 +198,7 @@ func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce 
 		intermediate[ihash(kv.Key)%NReduce] = append(intermediate[ihash(kv.Key)%NReduce], kv)
 	}
 
-	fmt.Println(intermediate)
-
-	var mappedFiles []string
+	mappedFiles := make(map[int]string)
 
 	for key, _ := range intermediate {
 		mappedFilename := fmt.Sprintf("%v-%v-%v", workerID, filename, key)
@@ -155,7 +207,9 @@ func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce 
 			fmt.Println(err)
 			return nil, err
 		}
-		mappedFiles = append(mappedFiles, mappedFilename)
+		mappedFiles[key] = mappedFilename
+
+		sort.Sort(ByKey(intermediate[key]))
 
 		enc := json.NewEncoder(file)
 		enc.Encode(intermediate[key])
@@ -180,7 +234,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	if err == nil {
 		return true
 	}
-
 	fmt.Println(err)
+
 	return false
 }
