@@ -55,6 +55,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			if mappedFiles, err := ProcessTask(reply.Filename, mapf, reply.NReduce, workerID); err == nil {
 				// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 				argsComplete := CompleteRequest{WorkerID: workerID, MapperOutputFiles: mappedFiles}
+				fmt.Println("Mapped files are: ", mappedFiles)
 				replyComplete := CompleteReply{}
 				// time.Sleep(10 * time.Millisecond)
 				ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
@@ -111,7 +112,7 @@ func Worker(mapf func(string, string) []KeyValue,
 func ProcessReduceTask(files []string, reducef func(string, []string) string, nReduceID int) error {
 	var totalKeys []KeyValue
 
-	// fmt.Println(files)
+	fmt.Println("Files received in reduce are:", files)
 	for _, filename := range files {
 		openedFile, err := os.Open(filename)
 		if err != nil {
@@ -152,6 +153,10 @@ func ProcessReduceTask(files []string, reducef func(string, []string) string, nR
 
 		for j < len(totalKeys) && totalKeys[i].Key == totalKeys[j].Key {
 			j++
+		}
+
+		if totalKeys[i].Key == "yawl" {
+			fmt.Println("Got yawl sir, i and j are: ", i, j)
 		}
 
 		values := []string{}

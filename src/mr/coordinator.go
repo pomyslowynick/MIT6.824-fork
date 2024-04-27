@@ -7,18 +7,25 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 	"time"
 )
 
+type PoorMansSyncMap struct {
+	Files map[int][]string
+	Lock  sync.Mutex
+}
 type Coordinator struct {
 	// Your definitions here.
 	FileList          []string
+	FileListChan      chan string
 	UnusedFiles       []string
 	UsedFiles         []string
 	Workers           map[string]WorkerEntry
 	NReduce           int
-	UnusedReduceFiles map[int][]string
+	UnusedReduceFiles PoorMansSyncMap
 	UsedReduceFiles   map[int][]string
+	NReduceChan       chan int
 	Reducers          map[string]WorkerEntry
 	JobComplete       bool
 }
@@ -46,23 +53,30 @@ func (c *Coordinator) RequestComplete(args *CompleteRequest, reply *CompleteRepl
 		entry.State = "completed"
 	}
 
+	fmt.Prinln("completed file is: ", file)
+	c.UnusedReduceFiles.Lock.Lock()
 	for key, file := range args.MapperOutputFiles {
-		c.UnusedReduceFiles[key] = append(c.UnusedReduceFiles[key], file)
+		c.UnusedReduceFiles.Files[key] = append(c.UnusedReduceFiles.Files[key], file)
 	}
+	c.UnusedReduceFiles.Lock.Unlock()
 	return nil
 }
 
 func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
-	if len(c.UnusedFiles) > 0 {
-		assignedFile := c.UnusedFiles[0]
+	if assignedFile, ok := <-c.FileListChan; ok {
+		// fmt.Println("file from the channel: ", assignedFile, " ", ok)
+		if !ok {
+			reply.Finished = true
+			return nil
+		}
 		reply.Filename = assignedFile
 		c.UsedFiles = append(c.UsedFiles, assignedFile)
 
-		if len(c.UnusedFiles) == 1 {
-			c.UnusedFiles = nil
-		} else {
-			c.UnusedFiles = c.UnusedFiles[1:]
-		}
+		// if len(c.UnusedFiles) == 1 {
+		// 	c.UnusedFiles = nil
+		// } else {
+		// 	c.UnusedFiles = c.UnusedFiles[1:]
+		// }
 
 		reply.NReduce = c.NReduce
 		// TODO: Chck that we are not adding redundant entries to Workers
@@ -78,29 +92,33 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 	}
 	// TODO: Run async task to check on result after 60 seconds
 
+	// time.Sleep(1 * time.Second)
 	return nil
 }
 
 func (c *Coordinator) RequestNReduceID(args *ReduceNReduceIDRequest, reply *ReduceNReduceIDReply) error {
-	if c.NReduce < 0 {
+	// fmt.Println("getting an ID")
+	NReduce, ok := <-c.NReduceChan
+	if !ok {
+		fmt.Println("no more IDs, finishing up")
 		reply.Finished = true
 		c.JobComplete = true
 		return nil
 	}
-	reply.NReduceID = c.NReduce
+	// fmt.Println("got an ID: ", NReduce)
+	reply.NReduceID = NReduce
 	retrievedReducer := c.Reducers[args.ReducerID]
-	retrievedReducer.NReduce = c.NReduce
-	c.NReduce--
+	retrievedReducer.NReduce = NReduce
 	return nil
 }
 
 func (c *Coordinator) RequestReduce(args *ReduceRequest, reply *ReduceReply) error {
 	// How to create a sticky ID for reducers where they process single file number, all of one from 0-9
 	NReduceID := args.NReduceID
-	if len(c.UnusedReduceFiles[NReduceID]) > 0 {
-		reply.Files = c.UnusedReduceFiles[NReduceID]
-		c.UsedReduceFiles[NReduceID] = append(c.UsedReduceFiles[NReduceID], c.UnusedReduceFiles[NReduceID]...)
-		c.UnusedReduceFiles[NReduceID] = nil
+	if len(c.UnusedReduceFiles.Files[NReduceID]) > 0 {
+		reply.Files = c.UnusedReduceFiles.Files[NReduceID]
+		c.UsedReduceFiles[NReduceID] = append(c.UsedReduceFiles[NReduceID], c.UnusedReduceFiles.Files[NReduceID]...)
+		c.UnusedReduceFiles.Files[NReduceID] = nil
 
 		// if len(c.UnusedReduceFiles) != 1 {
 		// 	c.UnusedReduceFiles[NReduceID] = c.UnusedReduceFiles[NReduceID][1:]
@@ -150,6 +168,7 @@ func (c *Coordinator) Done() bool {
 
 	if c.JobComplete {
 		ret = true
+		fmt.Println("MapReduce has completed")
 	}
 
 	return ret
@@ -165,9 +184,26 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.NReduce = nReduce
 	c.Workers = make(map[string]WorkerEntry)
 	c.Reducers = make(map[string]WorkerEntry)
-	c.UnusedReduceFiles = make(map[int][]string)
+	c.UnusedReduceFiles = PoorMansSyncMap{Files: make(map[int][]string), Lock: sync.Mutex{}}
 	c.UsedReduceFiles = make(map[int][]string)
-	// Your code here.
+
+	c.FileListChan = make(chan string)
+
+	go func() {
+		defer close(c.FileListChan)
+		for _, file := range files {
+			c.FileListChan <- file
+		}
+	}()
+
+	c.NReduceChan = make(chan int)
+	go func() {
+		defer close(c.NReduceChan)
+		for i := 0; i < nReduce; i++ {
+			fmt.Println("Writing to NReduce chan")
+			c.NReduceChan <- i
+		}
+	}()
 
 	c.server()
 	return &c
