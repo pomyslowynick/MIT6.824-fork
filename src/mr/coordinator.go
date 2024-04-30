@@ -7,14 +7,14 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"sync"
 	"time"
 )
 
-type PoorMansSyncMap struct {
-	Files map[int][]string
-	Lock  sync.Mutex
+type FileStream struct {
+	Stream    chan string
+	FileCount int
 }
+
 type Coordinator struct {
 	// Your definitions here.
 	FileList          []string
@@ -23,7 +23,7 @@ type Coordinator struct {
 	UsedFiles         []string
 	Workers           map[string]WorkerEntry
 	NReduce           int
-	UnusedReduceFiles PoorMansSyncMap
+	UnusedReduceFiles map[int]FileStream
 	UsedReduceFiles   map[int][]string
 	NReduceChan       chan int
 	Reducers          map[string]WorkerEntry
@@ -53,30 +53,30 @@ func (c *Coordinator) RequestComplete(args *CompleteRequest, reply *CompleteRepl
 		entry.State = "completed"
 	}
 
-	fmt.Prinln("completed file is: ", file)
-	c.UnusedReduceFiles.Lock.Lock()
 	for key, file := range args.MapperOutputFiles {
-		c.UnusedReduceFiles.Files[key] = append(c.UnusedReduceFiles.Files[key], file)
+		fileStream := c.UnusedReduceFiles[key]
+		// fmt.Println("Writing to Stream: ", key, " chan. File: ", file, " channel: ", fileStream.Stream)
+		fileStream.Stream <- file
+		fmt.Println("Wrote to Stream: ", key, " chan", " file: ", file)
+
+		c.UnusedReduceFiles[key] = FileStream{c.UnusedReduceFiles[key].Stream, c.UnusedReduceFiles[key].FileCount + 1}
+		fmt.Println("Closing channel num: ", key, "file count is: ", fileStream.FileCount, " and file list len: ", len(c.FileList), " and the channel is: ", fileStream.Stream)
+		if c.UnusedReduceFiles[key].FileCount == len(c.FileList) {
+			close(c.UnusedReduceFiles[key].Stream)
+		}
 	}
-	c.UnusedReduceFiles.Lock.Unlock()
+
 	return nil
 }
 
 func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 	if assignedFile, ok := <-c.FileListChan; ok {
-		// fmt.Println("file from the channel: ", assignedFile, " ", ok)
 		if !ok {
 			reply.Finished = true
 			return nil
 		}
 		reply.Filename = assignedFile
 		c.UsedFiles = append(c.UsedFiles, assignedFile)
-
-		// if len(c.UnusedFiles) == 1 {
-		// 	c.UnusedFiles = nil
-		// } else {
-		// 	c.UnusedFiles = c.UnusedFiles[1:]
-		// }
 
 		reply.NReduce = c.NReduce
 		// TODO: Chck that we are not adding redundant entries to Workers
@@ -97,15 +97,14 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 }
 
 func (c *Coordinator) RequestNReduceID(args *ReduceNReduceIDRequest, reply *ReduceNReduceIDReply) error {
-	// fmt.Println("getting an ID")
 	NReduce, ok := <-c.NReduceChan
+	fmt.Println("Got NReduce id")
 	if !ok {
 		fmt.Println("no more IDs, finishing up")
 		reply.Finished = true
 		c.JobComplete = true
 		return nil
 	}
-	// fmt.Println("got an ID: ", NReduce)
 	reply.NReduceID = NReduce
 	retrievedReducer := c.Reducers[args.ReducerID]
 	retrievedReducer.NReduce = NReduce
@@ -113,37 +112,23 @@ func (c *Coordinator) RequestNReduceID(args *ReduceNReduceIDRequest, reply *Redu
 }
 
 func (c *Coordinator) RequestReduce(args *ReduceRequest, reply *ReduceReply) error {
-	// How to create a sticky ID for reducers where they process single file number, all of one from 0-9
 	NReduceID := args.NReduceID
-	if len(c.UnusedReduceFiles.Files[NReduceID]) > 0 {
-		reply.Files = c.UnusedReduceFiles.Files[NReduceID]
-		c.UsedReduceFiles[NReduceID] = append(c.UsedReduceFiles[NReduceID], c.UnusedReduceFiles.Files[NReduceID]...)
-		c.UnusedReduceFiles.Files[NReduceID] = nil
+	w := WorkerEntry{WorkerID: args.ReducerID, ReduceFiles: reply.Files, TimeStarted: time.Now()}
+	c.Reducers[args.ReducerID] = w
+	fmt.Println("Before the range over files stream")
+	for file := range c.UnusedReduceFiles[NReduceID].Stream {
+		fmt.Println("INside files stream range")
+		reply.Files = append(reply.Files, file)
+		// c.UsedReduceFiles[NReduceID] = append(c.UsedReduceFiles[NReduceID], c.UnusedReduceFiles.Files[NReduceID]...)
+		// c.UnusedReduceFiles.Files[NReduceID] = nil
 
 		// if len(c.UnusedReduceFiles) != 1 {
 		// 	c.UnusedReduceFiles[NReduceID] = c.UnusedReduceFiles[NReduceID][1:]
 		// }
 
-		w := WorkerEntry{WorkerID: args.ReducerID, ReduceFiles: reply.Files, TimeStarted: time.Now()}
-
-		// Not sure if we need to keep those in a global state var
-		// Could instead fire off a goroutine per worker to check back?
-		// How do we then know when it's request came back?
-		c.Reducers[args.ReducerID] = w
-		fmt.Println("Requesting reduce")
-
-	} else {
-		// TODO: Run async task to check on result after 60 seconds
-		reply.Finished = true
 	}
-	return nil
-}
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
+	fmt.Println("Outside files stream")
+	reply.Finished = true
 	return nil
 }
 
@@ -184,7 +169,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.NReduce = nReduce
 	c.Workers = make(map[string]WorkerEntry)
 	c.Reducers = make(map[string]WorkerEntry)
-	c.UnusedReduceFiles = PoorMansSyncMap{Files: make(map[int][]string), Lock: sync.Mutex{}}
+	c.UnusedReduceFiles = make(map[int]FileStream)
 	c.UsedReduceFiles = make(map[int][]string)
 
 	c.FileListChan = make(chan string)
@@ -196,12 +181,18 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		}
 	}()
 
+	for i := 0; i < nReduce; i++ {
+		stream := FileStream{make(chan string, nReduce), 0}
+		c.UnusedReduceFiles[i] = stream
+	}
+
 	c.NReduceChan = make(chan int)
 	go func() {
 		defer close(c.NReduceChan)
 		for i := 0; i < nReduce; i++ {
 			fmt.Println("Writing to NReduce chan")
 			c.NReduceChan <- i
+			fmt.Println("after writing to NReduce chan")
 		}
 	}()
 

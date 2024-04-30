@@ -28,6 +28,8 @@ type KeyValue struct {
 	Value string
 }
 
+var workerID string
+
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 func ihash(key string) int {
@@ -40,7 +42,7 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	workerID := uuid.NewString()
+	workerID = uuid.NewString()
 
 	// Request a Task, refactor later into a method
 	args := TaskRequest{WorkerID: workerID}
@@ -55,7 +57,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			if mappedFiles, err := ProcessTask(reply.Filename, mapf, reply.NReduce, workerID); err == nil {
 				// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 				argsComplete := CompleteRequest{WorkerID: workerID, MapperOutputFiles: mappedFiles}
-				fmt.Println("Mapped files are: ", mappedFiles)
+				fmt.Println("[Worker: ", workerID, "]", "Mapped files are: ", mappedFiles)
 				replyComplete := CompleteReply{}
 				// time.Sleep(10 * time.Millisecond)
 				ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
@@ -66,27 +68,25 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 
 	reducerID := uuid.NewString()
-	fmt.Println("Finished mapping, proceeding to reducing")
+	fmt.Println("[Worker: ", workerID, "] ", "Finished mapping, proceeding to reducing")
 	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 	// reducerID := reply.ReducerID
 	for {
 		argsReduceID := ReduceNReduceIDRequest{ReducerID: reducerID}
 		replyReduceID := ReduceNReduceIDReply{}
 		ok := call("Coordinator.RequestNReduceID", &argsReduceID, &replyReduceID)
+		fmt.Println("[Worker: ", workerID, "] ", "I got a nreduceID: ", replyReduceID.NReduceID)
 		if replyReduceID.Finished {
 			break
 		}
 
 		if ok {
 			for {
-				// fmt.Println(replyReduceID.NReduceID)
+				fmt.Println("Making a reduce request")
 				argsReduce := ReduceRequest{ReducerID: reducerID, NReduceID: replyReduceID.NReduceID}
 				replyReduce := ReduceReply{}
 				ok := call("Coordinator.RequestReduce", &argsReduce, &replyReduce)
 				if ok {
-					if replyReduce.Finished {
-						break
-					}
 					// ProcessTask(reply.Filename, mapf)
 					// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 					if err := ProcessReduceTask(replyReduce.Files, reducef, replyReduceID.NReduceID); err == nil {
@@ -96,8 +96,11 @@ func Worker(mapf func(string, string) []KeyValue,
 						// fmt.Println("Calling reduce complete")
 						ok = call("Coordinator.RequestReduceComplete", &argsComplete, &replyComplete)
 					} else {
-						panic("failed to run reduce on file: ")
+						panic(fmt.Sprintf("failed to run reduce on files: %v", replyReduce.Files))
 
+					}
+					if replyReduce.Finished {
+						break
 					}
 				} else {
 					fmt.Printf("call failed! Retrying: \n")
@@ -112,7 +115,7 @@ func Worker(mapf func(string, string) []KeyValue,
 func ProcessReduceTask(files []string, reducef func(string, []string) string, nReduceID int) error {
 	var totalKeys []KeyValue
 
-	fmt.Println("Files received in reduce are:", files)
+	fmt.Println("[Worker: ", workerID, "] ", "Files received in reduce are:", files)
 	for _, filename := range files {
 		openedFile, err := os.Open(filename)
 		if err != nil {
@@ -156,7 +159,7 @@ func ProcessReduceTask(files []string, reducef func(string, []string) string, nR
 		}
 
 		if totalKeys[i].Key == "yawl" {
-			fmt.Println("Got yawl sir, i and j are: ", i, j)
+			fmt.Println("[Worker: ", workerID, "] ", "Got yawl sir, i and j are: ", i, j)
 		}
 
 		values := []string{}
@@ -180,7 +183,6 @@ func ProcessReduceTask(files []string, reducef func(string, []string) string, nR
 	// time.Sleep(100 * time.Second)
 	// time.Sleep(100 * time.Second)
 	return nil
-
 }
 
 func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce int, workerID string) (map[int]string, error) {
