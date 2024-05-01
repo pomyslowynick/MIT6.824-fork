@@ -33,11 +33,18 @@ type Coordinator struct {
 type WorkerEntry struct {
 	WorkerID string
 	// TODO: Change to files
-	AssignedFile string
-	ReduceFiles  []string
-	TimeStarted  time.Time
-	State        string
-	NReduce      int
+	AssignedFile         string
+	ReduceFiles          []string
+	HealthCheckTimestamp time.Time
+	State                string
+	NReduce              int
+}
+
+func (c *Coordinator) RequestHealthCheck(args *HealthCheckRequest, reply *HealthCheckReply) error {
+	tempObject := c.Workers[args.WorkerID]
+	tempObject.HealthCheckTimestamp = time.Now()
+	c.Workers[args.WorkerID] = tempObject
+	return nil
 }
 
 func (c *Coordinator) RequestReduceComplete(args *ReduceCompleteRequest, reply *ReduceCompleteReply) error {
@@ -57,10 +64,10 @@ func (c *Coordinator) RequestComplete(args *CompleteRequest, reply *CompleteRepl
 		fileStream := c.UnusedReduceFiles[key]
 		// fmt.Println("Writing to Stream: ", key, " chan. File: ", file, " channel: ", fileStream.Stream)
 		fileStream.Stream <- file
-		// fmt.Println("Wrote to Stream: ", key, " chan", " file: ", file)
+		fmt.Println("Wrote to Stream: ", key, " chan", " file: ", file)
 
 		c.UnusedReduceFiles[key] = FileStream{c.UnusedReduceFiles[key].Stream, c.UnusedReduceFiles[key].FileCount + 1}
-		// fmt.Println("Closing channel num: ", key, "file count is: ", fileStream.FileCount, " and file list len: ", len(c.FileList), " and the channel is: ", fileStream.Stream)
+		fmt.Println("Closing channel num: ", key, "file count is: ", fileStream.FileCount, " and file list len: ", len(c.FileList), " and the channel is: ", fileStream.Stream)
 		if c.UnusedReduceFiles[key].FileCount == len(c.FileList) {
 			close(c.UnusedReduceFiles[key].Stream)
 		}
@@ -80,7 +87,7 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 
 		reply.NReduce = c.NReduce
 		// TODO: Chck that we are not adding redundant entries to Workers
-		w := WorkerEntry{WorkerID: args.WorkerID, AssignedFile: assignedFile, TimeStarted: time.Now(), State: "working"}
+		w := WorkerEntry{WorkerID: args.WorkerID, AssignedFile: assignedFile, HealthCheckTimestamp: time.Now(), State: "working"}
 
 		// Not sure if we need to keep those in a global state var
 		// Could instead fire off a goroutine per worker to check back?
@@ -98,7 +105,7 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 
 func (c *Coordinator) RequestNReduceID(args *ReduceNReduceIDRequest, reply *ReduceNReduceIDReply) error {
 	NReduce, ok := <-c.NReduceChan
-	// fmt.Println("Got NReduce id")
+	fmt.Println("Got NReduce id")
 	if !ok {
 		fmt.Println("no more IDs, finishing up")
 		reply.Finished = true
@@ -113,9 +120,9 @@ func (c *Coordinator) RequestNReduceID(args *ReduceNReduceIDRequest, reply *Redu
 
 func (c *Coordinator) RequestReduce(args *ReduceRequest, reply *ReduceReply) error {
 	NReduceID := args.NReduceID
-	w := WorkerEntry{WorkerID: args.ReducerID, ReduceFiles: reply.Files, TimeStarted: time.Now()}
+	w := WorkerEntry{WorkerID: args.ReducerID, ReduceFiles: reply.Files, HealthCheckTimestamp: time.Now()}
 	c.Reducers[args.ReducerID] = w
-	// fmt.Println("Before the range over files stream")
+	fmt.Println("Before the range over files stream")
 	for file := range c.UnusedReduceFiles[NReduceID].Stream {
 		reply.Files = append(reply.Files, file)
 		// c.UsedReduceFiles[NReduceID] = append(c.UsedReduceFiles[NReduceID], c.UnusedReduceFiles.Files[NReduceID]...)
@@ -126,7 +133,7 @@ func (c *Coordinator) RequestReduce(args *ReduceRequest, reply *ReduceReply) err
 		// }
 
 	}
-	// fmt.Println("Outside files stream")
+	fmt.Println("Outside files stream")
 	reply.Finished = true
 	return nil
 }
@@ -189,12 +196,25 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	go func() {
 		defer close(c.NReduceChan)
 		for i := 0; i < nReduce; i++ {
-			// fmt.Println("Writing to NReduce chan")
+			fmt.Println("Writing to NReduce chan")
 			c.NReduceChan <- i
-			// fmt.Println("after writing to NReduce chan")
+			fmt.Println("after writing to NReduce chan")
 		}
 	}()
 
+	go func() {
+		for {
+			time.Sleep(time.Second * 10)
+			fmt.Println("GC For mappers running, stop the world!")
+			for _, worker := range c.Workers {
+				if time.Since(worker.HealthCheckTimestamp) > time.Second*10 {
+					fmt.Println("10 seconds passed since workers ", worker.WorkerID, " last successful healthcheck")
+
+				}
+
+			}
+		}
+	}()
 	c.server()
 	return &c
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -44,6 +45,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	workerID = uuid.NewString()
 
+	go healthProbe(workerID)
 	// Request a Task, refactor later into a method
 	args := TaskRequest{WorkerID: workerID}
 	reply := TaskReply{}
@@ -115,7 +117,7 @@ func Worker(mapf func(string, string) []KeyValue,
 func ProcessReduceTask(files []string, reducef func(string, []string) string, nReduceID int) error {
 	var totalKeys []KeyValue
 
-	// fmt.Println("[Worker: ", workerID, "] ", "Files received in reduce are:", files)
+	fmt.Println("[Worker: ", workerID, "] ", "Files received in reduce are:", files)
 	for _, filename := range files {
 		openedFile, err := os.Open(filename)
 		if err != nil {
@@ -133,18 +135,12 @@ func ProcessReduceTask(files []string, reducef func(string, []string) string, nR
 		}
 
 		totalKeys = append(totalKeys, decodedKeys...)
-
-		// fmt.Println(totalKeys)
-		// fmt.Println(filename)
-		// time.Sleep(100 * time.Second)
 	}
 
 	sort.Sort(ByKey(totalKeys))
 
-	// fmt.Println(totalKeys)
 	outputFile, err := os.Open(fmt.Sprintf("mr-out-%v", nReduceID))
 	if err != nil {
-		// fmt.Println("Creating output file: ", err)
 		outputFile, err = os.Create(fmt.Sprintf("mr-out-%v", nReduceID))
 		if err != nil {
 			return err
@@ -158,30 +154,17 @@ func ProcessReduceTask(files []string, reducef func(string, []string) string, nR
 			j++
 		}
 
-		if totalKeys[i].Key == "yawl" {
-			// fmt.Println("[Worker: ", workerID, "] ", "Got yawl sir, i and j are: ", i, j)
-		}
-
 		values := []string{}
 
 		for k := i; k < j; k++ {
 			values = append(values, totalKeys[k].Value)
 		}
-		// for _, val := range totalKeys[i:j] {
-		// 	values = append(values, val.Value)
-		// }
 
-		// fmt.Println("values are: ", values)
 		result := reducef(totalKeys[i].Key, values)
-		// fmt.Println("result is: ", result)
-		// fmt.Println("key is: ", totalKeys[i].Key)
-		// time.Sleep(500 * time.Millisecond)
 
 		outputFile.WriteString(fmt.Sprintf("%v %v\n", totalKeys[i].Key, result))
 		i = j
 	}
-	// time.Sleep(100 * time.Second)
-	// time.Sleep(100 * time.Second)
 	return nil
 }
 
@@ -223,6 +206,15 @@ func ProcessTask(filename string, mapf func(string, string) []KeyValue, NReduce 
 	}
 
 	return mappedFiles, nil
+}
+
+func healthProbe(workerID string) {
+	args := HealthCheckRequest{WorkerID: workerID}
+	reply := HealthCheckReply{}
+	for {
+		time.Sleep(time.Second * 2)
+		call("Coordinator.RequestHealthCheck", &args, &reply)
+	}
 }
 
 // send an RPC request to the coordinator, wait for the response.
