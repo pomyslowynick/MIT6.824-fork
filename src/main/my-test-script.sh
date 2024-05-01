@@ -1,4 +1,3 @@
 go run mrcoordinator.go pg-* &
-go run mrworker.go wc.so &
-go run mrworker.go wc.so &
-go run mrworker.go wc.so &
+timeout -k 2s 120s go run mrworker.go indexer.so &
+timeout -k 2s 120s go run mrworker.go indexer.so 

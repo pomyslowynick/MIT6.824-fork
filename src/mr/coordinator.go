@@ -57,10 +57,10 @@ func (c *Coordinator) RequestComplete(args *CompleteRequest, reply *CompleteRepl
 		fileStream := c.UnusedReduceFiles[key]
 		// fmt.Println("Writing to Stream: ", key, " chan. File: ", file, " channel: ", fileStream.Stream)
 		fileStream.Stream <- file
-		fmt.Println("Wrote to Stream: ", key, " chan", " file: ", file)
+		// fmt.Println("Wrote to Stream: ", key, " chan", " file: ", file)
 
 		c.UnusedReduceFiles[key] = FileStream{c.UnusedReduceFiles[key].Stream, c.UnusedReduceFiles[key].FileCount + 1}
-		fmt.Println("Closing channel num: ", key, "file count is: ", fileStream.FileCount, " and file list len: ", len(c.FileList), " and the channel is: ", fileStream.Stream)
+		// fmt.Println("Closing channel num: ", key, "file count is: ", fileStream.FileCount, " and file list len: ", len(c.FileList), " and the channel is: ", fileStream.Stream)
 		if c.UnusedReduceFiles[key].FileCount == len(c.FileList) {
 			close(c.UnusedReduceFiles[key].Stream)
 		}
@@ -98,7 +98,7 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 
 func (c *Coordinator) RequestNReduceID(args *ReduceNReduceIDRequest, reply *ReduceNReduceIDReply) error {
 	NReduce, ok := <-c.NReduceChan
-	fmt.Println("Got NReduce id")
+	// fmt.Println("Got NReduce id")
 	if !ok {
 		fmt.Println("no more IDs, finishing up")
 		reply.Finished = true
@@ -115,9 +115,8 @@ func (c *Coordinator) RequestReduce(args *ReduceRequest, reply *ReduceReply) err
 	NReduceID := args.NReduceID
 	w := WorkerEntry{WorkerID: args.ReducerID, ReduceFiles: reply.Files, TimeStarted: time.Now()}
 	c.Reducers[args.ReducerID] = w
-	fmt.Println("Before the range over files stream")
+	// fmt.Println("Before the range over files stream")
 	for file := range c.UnusedReduceFiles[NReduceID].Stream {
-		fmt.Println("INside files stream range")
 		reply.Files = append(reply.Files, file)
 		// c.UsedReduceFiles[NReduceID] = append(c.UsedReduceFiles[NReduceID], c.UnusedReduceFiles.Files[NReduceID]...)
 		// c.UnusedReduceFiles.Files[NReduceID] = nil
@@ -127,7 +126,7 @@ func (c *Coordinator) RequestReduce(args *ReduceRequest, reply *ReduceReply) err
 		// }
 
 	}
-	fmt.Println("Outside files stream")
+	// fmt.Println("Outside files stream")
 	reply.Finished = true
 	return nil
 }
@@ -190,9 +189,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	go func() {
 		defer close(c.NReduceChan)
 		for i := 0; i < nReduce; i++ {
-			fmt.Println("Writing to NReduce chan")
+			// fmt.Println("Writing to NReduce chan")
 			c.NReduceChan <- i
-			fmt.Println("after writing to NReduce chan")
+			// fmt.Println("after writing to NReduce chan")
 		}
 	}()
 

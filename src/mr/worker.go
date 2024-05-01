@@ -57,7 +57,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			if mappedFiles, err := ProcessTask(reply.Filename, mapf, reply.NReduce, workerID); err == nil {
 				// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 				argsComplete := CompleteRequest{WorkerID: workerID, MapperOutputFiles: mappedFiles}
-				fmt.Println("[Worker: ", workerID, "]", "Mapped files are: ", mappedFiles)
+				// fmt.Println("[Worker: ", workerID, "]", "Mapped files are: ", mappedFiles)
 				replyComplete := CompleteReply{}
 				// time.Sleep(10 * time.Millisecond)
 				ok = call("Coordinator.RequestComplete", &argsComplete, &replyComplete)
@@ -68,21 +68,21 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 
 	reducerID := uuid.NewString()
-	fmt.Println("[Worker: ", workerID, "] ", "Finished mapping, proceeding to reducing")
+	// fmt.Println("[Worker: ", workerID, "] ", "Finished mapping, proceeding to reducing")
 	// argsComplete := CompleteRequest{Result: wordsMap, WorkerID: workerID}
 	// reducerID := reply.ReducerID
 	for {
 		argsReduceID := ReduceNReduceIDRequest{ReducerID: reducerID}
 		replyReduceID := ReduceNReduceIDReply{}
 		ok := call("Coordinator.RequestNReduceID", &argsReduceID, &replyReduceID)
-		fmt.Println("[Worker: ", workerID, "] ", "I got a nreduceID: ", replyReduceID.NReduceID)
+		// fmt.Println("[Worker: ", workerID, "] ", "I got a nreduceID: ", replyReduceID.NReduceID)
 		if replyReduceID.Finished {
 			break
 		}
 
 		if ok {
 			for {
-				fmt.Println("Making a reduce request")
+				// fmt.Println("Making a reduce request")
 				argsReduce := ReduceRequest{ReducerID: reducerID, NReduceID: replyReduceID.NReduceID}
 				replyReduce := ReduceReply{}
 				ok := call("Coordinator.RequestReduce", &argsReduce, &replyReduce)
@@ -115,7 +115,7 @@ func Worker(mapf func(string, string) []KeyValue,
 func ProcessReduceTask(files []string, reducef func(string, []string) string, nReduceID int) error {
 	var totalKeys []KeyValue
 
-	fmt.Println("[Worker: ", workerID, "] ", "Files received in reduce are:", files)
+	// fmt.Println("[Worker: ", workerID, "] ", "Files received in reduce are:", files)
 	for _, filename := range files {
 		openedFile, err := os.Open(filename)
 		if err != nil {
@@ -159,7 +159,7 @@ func ProcessReduceTask(files []string, reducef func(string, []string) string, nR
 		}
 
 		if totalKeys[i].Key == "yawl" {
-			fmt.Println("[Worker: ", workerID, "] ", "Got yawl sir, i and j are: ", i, j)
+			// fmt.Println("[Worker: ", workerID, "] ", "Got yawl sir, i and j are: ", i, j)
 		}
 
 		values := []string{}
