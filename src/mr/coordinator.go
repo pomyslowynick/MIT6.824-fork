@@ -20,7 +20,7 @@ type Coordinator struct {
 	FileList          []string
 	FileListChan      chan string
 	UnusedFiles       []string
-	UsedFiles         []string
+	CompletedFiles    []string
 	Workers           map[string]WorkerEntry
 	NReduce           int
 	UnusedReduceFiles map[int]FileStream
@@ -31,8 +31,7 @@ type Coordinator struct {
 }
 
 type WorkerEntry struct {
-	WorkerID string
-	// TODO: Change to files
+	WorkerID             string
 	AssignedFile         string
 	ReduceFiles          []string
 	HealthCheckTimestamp time.Time
@@ -73,6 +72,11 @@ func (c *Coordinator) RequestComplete(args *CompleteRequest, reply *CompleteRepl
 		}
 	}
 
+	// Stopped here, thinking of the right condition to close this channel
+	if len(c.UseFiles) == len(FileList) {
+		close(c.FileListChan)
+	}
+
 	return nil
 }
 
@@ -83,7 +87,6 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 			return nil
 		}
 		reply.Filename = assignedFile
-		c.UsedFiles = append(c.UsedFiles, assignedFile)
 
 		reply.NReduce = c.NReduce
 		// TODO: Chck that we are not adding redundant entries to Workers
@@ -98,7 +101,6 @@ func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskReply) error {
 		reply.Finished = true
 	}
 	// TODO: Run async task to check on result after 60 seconds
-
 	// time.Sleep(1 * time.Second)
 	return nil
 }
@@ -120,7 +122,7 @@ func (c *Coordinator) RequestNReduceID(args *ReduceNReduceIDRequest, reply *Redu
 
 func (c *Coordinator) RequestReduce(args *ReduceRequest, reply *ReduceReply) error {
 	NReduceID := args.NReduceID
-	w := WorkerEntry{WorkerID: args.ReducerID, ReduceFiles: reply.Files, HealthCheckTimestamp: time.Now()}
+	w := WorkerEntry{WorkerID: args.ReducerID, HealthCheckTimestamp: time.Now()}
 	c.Reducers[args.ReducerID] = w
 	fmt.Println("Before the range over files stream")
 	for file := range c.UnusedReduceFiles[NReduceID].Stream {
@@ -181,7 +183,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.FileListChan = make(chan string)
 
 	go func() {
-		defer close(c.FileListChan)
 		for _, file := range files {
 			c.FileListChan <- file
 		}
@@ -209,7 +210,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			for _, worker := range c.Workers {
 				if time.Since(worker.HealthCheckTimestamp) > time.Second*10 {
 					fmt.Println("10 seconds passed since workers ", worker.WorkerID, " last successful healthcheck")
-
+					c.FileListChan <- worker.AssignedFile
 				}
 
 			}
